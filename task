@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Repo-local Task runner; the pinned version is installed into .bin/.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+exec "${ROOT}/scripts/task.sh" "$@"

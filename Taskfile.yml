@@ -1,0 +1,18 @@
+version: '3'
+tasks:
+  check:
+    desc: Verify the source lock, license inventory, notices, and fixtures without building or using the network
+    cmds:
+      - python3 scripts/engine.py check
+  test:
+    desc: Run the build, verification, and release tooling tests
+    cmds:
+      - python3 -m unittest discover -s tests -t .
+  build:
+    desc: Build one platform's engine archive with Docker (--platform linux-amd64|linux-arm64 --output NEW_DIR)
+    cmds:
+      - python3 scripts/engine.py build {{.CLI_ARGS}}
+  verify:
+    desc: Verify an engine archive and run it when this host matches its platform (--platform P --archive FILE)
+    cmds:
+      - python3 scripts/engine.py verify {{.CLI_ARGS}}
