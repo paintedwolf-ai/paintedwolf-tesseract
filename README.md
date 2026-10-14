@@ -137,7 +137,7 @@ byte-for-byte reproducibility.
   reviewers** set to the release operator. Disable administrator bypass and
   restrict it to tags matching `v*`.
 - **Branch ruleset:** activate a `main` ruleset requiring pull requests and the
-  `check` status from GitHub Actions, and blocking deletion and force pushes.
+  `check` and `DCO-owned` statuses from GitHub Actions, and blocking deletion and force pushes.
 - **Tag rulesets:** restrict updates and deletions of `v*` tags with no bypass,
   and restrict their creation to the release operator.
 - **Releases:** keep immutable releases enabled.

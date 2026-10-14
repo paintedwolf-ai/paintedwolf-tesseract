@@ -18,7 +18,7 @@ assets for platforms the workflow does not build and run.
 
 Commit with a DCO sign-off (`git commit -s`) as
 `Chris Beckman <chris@paintedwolf.ai>`. Work on a branch and open a pull request;
-`main` requires the `check` status. Never create or push tags, dispatch a
+`main` requires the `check` and `DCO-owned` statuses. Never create or push tags, dispatch a
 release, or publish a draft unless the maintainer asks.
 
 Never remove another agent's work, stash the shared tree, or stop a process you
