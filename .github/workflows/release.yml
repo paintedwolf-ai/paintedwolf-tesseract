@@ -1,0 +1,165 @@
+name: Release
+on:
+  # A pull request that changes the build qualifies it; only a dispatch at the
+  # version tag releases.
+  pull_request:
+    paths:
+      - engine/**
+      - scripts/**
+      - tests/**
+      - Taskfile.yml
+      - .github/workflows/release.yml
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: qualify builds and checks both architectures on any branch; release drafts the version tag
+        type: choice
+        required: true
+        default: qualify
+        options:
+          - qualify
+          - release
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.26.6'
+          cache: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+      - name: Check the run identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OPERATION: ${{ inputs.operation || 'qualify' }}
+        run: python3 scripts/release.py --operation "$OPERATION" preflight
+      - run: ./task check
+      - run: ./task test
+
+  build:
+    needs: preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-amd64
+            runner: ubuntu-24.04
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+      - name: Build, verify, and run the engine on its own architecture
+        env:
+          OPERATION: ${{ inputs.operation || 'qualify' }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          python3 scripts/engine.py build --platform "$PLATFORM" --output "$RUNNER_TEMP/build"
+          archive="$(ls "$RUNNER_TEMP"/build/*.tar.gz)"
+          python3 scripts/engine.py verify --platform "$PLATFORM" --archive "$archive" --require-run --output "$RUNNER_TEMP/facts.json"
+          mkdir "$RUNNER_TEMP/outgoing"
+          cp "$archive" "$RUNNER_TEMP/outgoing/"
+          python3 scripts/release.py --operation "$OPERATION" build-evidence --facts "$RUNNER_TEMP/facts.json" --output "$RUNNER_TEMP/outgoing/build-evidence-$PLATFORM.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: engine-${{ matrix.platform }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/outgoing/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  assemble:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: engine-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/incoming
+      - name: Recheck both platforms and assemble the release files
+        env:
+          OPERATION: ${{ inputs.operation || 'qualify' }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release.py --operation "$OPERATION" assemble --output "$RUNNER_TEMP/release" "$RUNNER_TEMP"/incoming/*
+          cat "$RUNNER_TEMP/release/SHA256SUMS"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  release:
+    if: inputs.operation == 'release'
+    needs: assemble
+    environment: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release
+      - name: Recheck the release identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/release.py --operation release preflight
+      - name: Attest the archives, checksums, descriptor, and build evidence
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: |
+            ${{ runner.temp }}/release/*.tar.gz
+            ${{ runner.temp }}/release/SHA256SUMS
+            ${{ runner.temp }}/release/release.json
+            ${{ runner.temp }}/release/build-evidence-*.json
+          create-storage-record: false
+      - name: Create and verify a complete draft for human publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ATTESTATION_BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          cp "$ATTESTATION_BUNDLE" "$RUNNER_TEMP/release/provenance.sigstore.json"
+          python3 scripts/release.py --operation release draft "$RUNNER_TEMP/release"
